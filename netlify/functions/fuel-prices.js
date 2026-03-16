@@ -8,10 +8,10 @@ const json = (statusCode, body) => ({
   statusCode,
   headers: {
     "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "public, max-age=300",
+    "Cache-Control": "no-store",
     "Access-Control-Allow-Origin": "*",
   },
-  body: JSON.stringify(body),
+  body: JSON.stringify(body, null, 2),
 });
 
 const getEnv = (...keys) => {
@@ -41,6 +41,7 @@ const isOmaghStation = (station) => {
     station?.addressLine4,
     station?.postcode,
     station?.name,
+    station?.brand,
   ]
     .filter(Boolean)
     .join(" ")
@@ -62,13 +63,24 @@ const extractStationId = (item) =>
   item?.siteId ||
   item?.site_id ||
   item?.id ||
+  item?.siteid ||
   null;
+
+const debugLog = (...args) => {
+  console.log("[fuel-prices]", ...args);
+};
 
 const getToken = async ({ tokenUrl, clientId, clientSecret }) => {
   const basic = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
 
   const body = new URLSearchParams({
     grant_type: "client_credentials",
+  });
+
+  debugLog("Requesting token", {
+    tokenUrl,
+    clientIdPreview: clientId ? `${clientId.slice(0, 4)}***` : "",
+    clientSecretPresent: !!clientSecret,
   });
 
   const res = await fetch(tokenUrl, {
@@ -82,6 +94,12 @@ const getToken = async ({ tokenUrl, clientId, clientSecret }) => {
   });
 
   const raw = await safeText(res);
+
+  debugLog("Token response", {
+    status: res.status,
+    statusText: res.statusText,
+    bodyPreview: raw ? raw.slice(0, 500) : "",
+  });
 
   if (!res.ok) {
     throw new Error(`Token request failed (${res.status}): ${raw || res.statusText}`);
@@ -107,8 +125,11 @@ const getToken = async ({ tokenUrl, clientId, clientSecret }) => {
   return accessToken;
 };
 
-const getJson = async (url, accessToken) => {
+const getJson = async (url, accessToken, label) => {
+  debugLog(`Requesting ${label}`, { url });
+
   const res = await fetch(url, {
+    method: "GET",
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/json",
@@ -117,14 +138,20 @@ const getJson = async (url, accessToken) => {
 
   const raw = await safeText(res);
 
+  debugLog(`${label} response`, {
+    status: res.status,
+    statusText: res.statusText,
+    bodyPreview: raw ? raw.slice(0, 500) : "",
+  });
+
   if (!res.ok) {
-    throw new Error(`API request failed (${res.status}) for ${url}: ${raw || res.statusText}`);
+    throw new Error(`API request failed (${res.status}) for ${label}: ${raw || res.statusText}`);
   }
 
   try {
     return raw ? JSON.parse(raw) : {};
   } catch {
-    throw new Error(`Invalid JSON from ${url}: ${raw}`);
+    throw new Error(`Invalid JSON from ${label}: ${raw}`);
   }
 };
 
@@ -144,26 +171,29 @@ export async function handler() {
       "CLIENT_SECRET"
     );
 
-    const tokenUrl = getEnv(
-      "FUEL_FINDER_TOKEN_URL",
-      "FUEL_TOKEN_URL",
-      "FF_TOKEN_URL"
-    ) || DEFAULT_TOKEN_URL;
+    const tokenUrl =
+      getEnv("FUEL_FINDER_TOKEN_URL", "FUEL_TOKEN_URL", "FF_TOKEN_URL") ||
+      DEFAULT_TOKEN_URL;
 
-    const pricesUrl = getEnv(
-      "FUEL_FINDER_PRICES_URL",
-      "FUEL_PRICES_URL",
-      "FF_PRICES_URL"
-    ) || DEFAULT_PRICES_URL;
+    const pricesUrl =
+      getEnv("FUEL_FINDER_PRICES_URL", "FUEL_PRICES_URL", "FF_PRICES_URL") ||
+      DEFAULT_PRICES_URL;
 
-    const forecourtsUrl = getEnv(
-      "FUEL_FINDER_FORECOURTS_URL",
-      "FUEL_FORECOURTS_URL",
-      "FF_FORECOURTS_URL"
-    ) || DEFAULT_FORECOURTS_URL;
+    const forecourtsUrl =
+      getEnv("FUEL_FINDER_FORECOURTS_URL", "FUEL_FORECOURTS_URL", "FF_FORECOURTS_URL") ||
+      DEFAULT_FORECOURTS_URL;
+
+    debugLog("Handler started", {
+      hasClientId: !!clientId,
+      hasClientSecret: !!clientSecret,
+      tokenUrl,
+      pricesUrl,
+      forecourtsUrl,
+    });
 
     if (!clientId || !clientSecret) {
       return json(500, {
+        ok: false,
         error: "Missing Fuel Finder credentials",
         missing: {
           clientId: !clientId,
@@ -175,8 +205,8 @@ export async function handler() {
     const accessToken = await getToken({ tokenUrl, clientId, clientSecret });
 
     const [pricesPayload, forecourtsPayload] = await Promise.all([
-      getJson(pricesUrl, accessToken),
-      getJson(forecourtsUrl, accessToken),
+      getJson(pricesUrl, accessToken, "prices"),
+      getJson(forecourtsUrl, accessToken, "forecourts"),
     ]);
 
     const prices =
@@ -195,6 +225,11 @@ export async function handler() {
       forecourtsPayload?.stations ||
       [];
 
+    debugLog("Parsed payloads", {
+      pricesCount: Array.isArray(prices) ? prices.length : 0,
+      forecourtsCount: Array.isArray(forecourts) ? forecourts.length : 0,
+    });
+
     const forecourtMap = new Map();
 
     for (const station of forecourts) {
@@ -203,7 +238,7 @@ export async function handler() {
       forecourtMap.set(String(id), station);
     }
 
-    const merged = prices
+    const merged = (Array.isArray(prices) ? prices : [])
       .map((priceItem) => {
         const id = extractStationId(priceItem);
         const station = id ? forecourtMap.get(String(id)) : null;
@@ -224,11 +259,7 @@ export async function handler() {
           addressLine1: station?.addressLine1 || station?.address1 || "",
           addressLine2: station?.addressLine2 || station?.address2 || "",
           addressLine3: station?.addressLine3 || station?.address3 || "",
-          town:
-            station?.town ||
-            station?.city ||
-            station?.locality ||
-            "",
+          town: station?.town || station?.city || station?.locality || "",
           postcode: station?.postcode || "",
           e10: toNumber(priceItem?.e10 ?? priceItem?.petrol ?? priceItem?.unleaded),
           e5: toNumber(priceItem?.e5 ?? priceItem?.superUnleaded),
@@ -243,10 +274,16 @@ export async function handler() {
       })
       .filter(isOmaghStation)
       .sort((a, b) => {
-        const aBest = [a.e10, a.e5, a.b7, a.sdv].filter((n) => n !== null).sort((x, y) => x - y)[0] ?? 999999;
-        const bBest = [b.e10, b.e5, b.b7, b.sdv].filter((n) => n !== null).sort((x, y) => x - y)[0] ?? 999999;
+        const aBest =
+          [a.e10, a.e5, a.b7, a.sdv].filter((n) => n !== null).sort((x, y) => x - y)[0] ??
+          999999;
+        const bBest =
+          [b.e10, b.e5, b.b7, b.sdv].filter((n) => n !== null).sort((x, y) => x - y)[0] ??
+          999999;
         return aBest - bBest;
       });
+
+    debugLog("Returning stations", { count: merged.length });
 
     return json(200, {
       ok: true,
@@ -254,7 +291,13 @@ export async function handler() {
       stations: merged,
     });
   } catch (error) {
+    debugLog("Handler error", {
+      message: error?.message || "Unknown error",
+      stack: error?.stack || "",
+    });
+
     return json(500, {
+      ok: false,
       error: error?.message || "Unknown error",
     });
   }
