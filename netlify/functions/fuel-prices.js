@@ -1,8 +1,8 @@
 // netlify/functions/fuel-prices.js
 
-const DEFAULT_TOKEN_URL = "https://api.fuel-finder.service.gov.uk/api/v1/access-token";
-const UNLEADED_URL = "https://api.fuel-finder.service.gov.uk/v1/prices?fuel_type=unleaded";
-const DIESEL_URL = "https://api.fuel-finder.service.gov.uk/v1/prices?fuel_type=diesel";
+const DEFAULT_TOKEN_URL = "https://api.fuelfinder.service.gov.uk/api/v1/access-token";
+const UNLEADED_URL = "https://api.fuelfinder.service.gov.uk/v1/prices?fuel_type=unleaded";
+const DIESEL_URL = "https://api.fuelfinder.service.gov.uk/v1/prices?fuel_type=diesel";
 
 const json = (statusCode, body) => ({
   statusCode,
