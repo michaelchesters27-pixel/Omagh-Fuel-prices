@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Omagh Fuel Prices</title>
+  <meta name="description" content="Omagh fuel prices." />
+  <style>
+    :root{
+      --panel:rgba(255,255,255,0.06);
+      --panel-2:#0f172a;
+      --border:rgba(255,255,255,0.10);
+      --text:#ffffff;
+      --muted:#94a3b8;
+      --green:#22c55e;
+      --orange:#f59e0b;
+      --blue:#3b82f6;
+      --red:#ef4444;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:Arial, Helvetica, sans-serif;background:linear-gradient(180deg,#020617 0%, #0f172a 100%);color:var(--text);min-height:100vh;}
+    .wrap{max-width:430px;margin:0 auto;padding:16px 16px 40px;}
+    .card,.station-card,.muted-card,.notice{background:var(--panel);border:1px solid var(--border);border-radius:24px;box-shadow:0 12px 28px rgba(0,0,0,0.2);}
+    .card{padding:16px;box-shadow:0 20px 40px rgba(0,0,0,0.25);}
+    .topbar{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;}
+    .eyebrow{font-size:11px;letter-spacing:0.22em;text-transform:uppercase;color:#a7f3d0;margin:0 0 8px;font-weight:700;}
+    .eyebrow.orange{color:#fcd34d;}
+    .eyebrow.blue{color:#93c5fd;}
+    h1{margin:0;font-size:30px;line-height:1.05;}
+    .badge{background:rgba(34,197,94,0.12);color:#bbf7d0;border-radius:999px;padding:8px 12px;font-size:12px;font-weight:700;white-space:nowrap;}
+    .lead{color:#cbd5e1;font-size:14px;line-height:1.5;margin:14px 0 0;}
+    .toggle-row{display:flex;gap:8px;margin-top:16px;}
+    button{border:none;cursor:pointer;font:inherit;}
+    .toggle{flex:1;border-radius:18px;padding:14px 16px;background:var(--panel);color:#e2e8f0;border:1px solid var(--border);font-weight:700;}
+    .toggle.active{background:#ffffff;color:#020617;}
+    .section{margin-top:14px;}
+    .highlight{background:linear-gradient(135deg,#22c55e,#86efac);border-radius:26px;padding:1px;box-shadow:0 15px 35px rgba(0,0,0,0.25);}
+    .highlight-inner{background:#020617;border-radius:25px;padding:16px;}
+    .highlight-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;}
+    .muted{color:var(--muted);font-size:14px;}
+    .price-big{font-size:34px;font-weight:800;margin:0;text-align:right;}
+    .updated{font-size:12px;color:var(--muted);text-align:right;margin-top:4px;max-width:160px;line-height:1.3;}
+    .station-card{padding:0;overflow:hidden;margin-top:12px;}
+    .band{height:8px;background:transparent;}
+    .band.cheapest{background:var(--green);}
+    .band.second{background:var(--orange);}
+    .band.third{background:var(--blue);}
+    .station-inner{padding:16px;}
+    .station-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;}
+    .rank{width:28px;height:28px;border-radius:999px;background:#fff;color:#020617;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;margin-right:8px;flex:0 0 28px;}
+    .station-name-wrap{display:flex;align-items:flex-start;gap:8px;}
+    .station-name{font-size:20px;font-weight:800;margin:0;line-height:1.1;}
+    .station-sub{color:var(--muted);font-size:14px;margin:6px 0 0;}
+    .station-small{color:#64748b;font-size:12px;margin:10px 0 0;line-height:1.4;}
+    .station-price{text-align:right;}
+    .station-price strong{display:block;font-size:30px;line-height:1;}
+    .station-price span{display:block;margin-top:6px;color:#64748b;font-size:11px;letter-spacing:0.18em;text-transform:uppercase;font-weight:700;}
+    .price-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px;}
+    .mini{background:var(--panel-2);border-radius:18px;padding:12px;}
+    .mini label{display:block;color:#64748b;font-size:11px;letter-spacing:0.18em;text-transform:uppercase;font-weight:700;margin-bottom:6px;}
+    .mini strong{font-size:16px;}
+    .section-title{margin:18px 0 8px;font-size:13px;letter-spacing:0.18em;text-transform:uppercase;color:#94a3b8;font-weight:700;}
+    .muted-card{padding:16px;margin-top:12px;}
+    .muted-card h3{margin:0;font-size:18px;line-height:1.1;}
+    .muted-card p{margin:6px 0 0;color:#94a3b8;font-size:14px;}
+    .muted-card .status{margin-top:10px;font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:0.14em;}
+    .notice{padding:16px;line-height:1.5;}
+    .notice strong{display:block;margin-bottom:6px;}
+    .error{border-color:rgba(239,68,68,0.35);}
+    .error strong{color:#fecaca;}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="topbar">
+        <div>
+          <p class="eyebrow">Omagh Only</p>
+          <h1>Omagh Fuel Prices</h1>
+        </div>
+        <div class="badge">API Live</div>
+      </div>
+      <p class="lead">
+        Omagh fuel prices pulled through the Fuel Finder API. Switch between petrol and diesel and see matched Omagh stations ranked from cheapest to highest.
+      </p>
+      <div class="toggle-row">
+        <button id="petrolBtn" class="toggle active">Petrol</button>
+        <button id="dieselBtn" class="toggle">Diesel</button>
+      </div>
+    </div>
+
+    <div class="section" id="noticeWrap">
+      <div class="notice">
+        <strong>Loading prices…</strong>
+        Getting the latest Omagh data from the API.
+      </div>
+    </div>
+
+    <div class="section" id="cheapestWrap"></div>
+    <div class="section" id="results"></div>
+
+    <div class="section-title">Awaiting official match</div>
+    <div id="unmatched"></div>
+  </div>
+
+  <script>
+    let fuelType = 'petrol';
+    let apiData = null;
+
+    const petrolBtn = document.getElementById('petrolBtn');
+    const dieselBtn = document.getElementById('dieselBtn');
+    const noticeWrap = document.getElementById('noticeWrap');
+    const cheapestWrap = document.getElementById('cheapestWrap');
+    const results = document.getElementById('results');
+    const unmatchedWrap = document.getElementById('unmatched');
+
+    function formatPrice(value) {
+      if (value === null || value === undefined || Number.isNaN(value)) return '-';
+      return '£' + Number(value).toFixed(3);
+    }
+
+    function getLabel(index) {
+      if (index === 0) return { text: 'Cheapest in Omagh', cls: '' };
+      if (index === 1) return { text: '2nd Cheapest in Omagh', cls: 'orange' };
+      if (index === 2) return { text: '3rd Cheapest in Omagh', cls: 'blue' };
+      return null;
+    }
+
+    function bandClass(index) {
+      if (index === 0) return 'cheapest';
+      if (index === 1) return 'second';
+      if (index === 2) return 'third';
+      return '';
+    }
+
+    function getFiltered() {
+      if (!apiData || !apiData.matched) return [];
+      return [...apiData.matched]
+        .filter(item => item[fuelType] !== null && item[fuelType] !== undefined && !Number.isNaN(item[fuelType]))
+        .sort((a, b) => a[fuelType] - b[fuelType]);
+    }
+
+    function renderNotice() {
+      if (!apiData) return;
+      if (apiData.ok) {
+        noticeWrap.innerHTML = `
+          <div class="notice">
+            <strong>API connected</strong>
+            Last API refresh: ${apiData.generated_at || 'Unknown'}
+          </div>
+        `;
+      } else {
+        noticeWrap.innerHTML = `
+          <div class="notice error">
+            <strong>API error</strong>
+            ${apiData.error || 'Unable to fetch prices right now.'}
+          </div>
+        `;
+      }
+    }
+
+    function renderCheapest(data) {
+      if (!data.length) {
+        cheapestWrap.innerHTML = '';
+        return;
+      }
+      const cheapest = data[0];
+      cheapestWrap.innerHTML = `
+        <div class="highlight">
+          <div class="highlight-inner">
+            <div class="highlight-head">
+              <div>
+                <p class="eyebrow" style="margin-bottom:6px;">Cheapest in Omagh</p>
+                <h2 style="margin:0;font-size:26px;line-height:1.1;">${cheapest.station}</h2>
+                <p class="muted" style="margin-top:6px;">${cheapest.area}</p>
+              </div>
+              <div>
+                <p class="price-big">${formatPrice(cheapest[fuelType])}</p>
+                <p class="updated">${cheapest.updated || ''}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderResults(data) {
+      results.innerHTML = data.map((item, index) => {
+        const label = getLabel(index);
+        return `
+          <div class="station-card">
+            <div class="band ${bandClass(index)}"></div>
+            <div class="station-inner">
+              <div class="station-top">
+                <div>
+                  ${label ? `<p class="eyebrow ${label.cls}" style="margin-bottom:6px;">${label.text}</p>` : ''}
+                  <div class="station-name-wrap">
+                    <span class="rank">${index + 1}</span>
+                    <div>
+                      <h3 class="station-name">${item.station}</h3>
+                      <p class="station-sub">${item.area}</p>
+                      <p class="station-small">${item.updated || ''}</p>
+                    </div>
+                  </div>
+                </div>
+                <div class="station-price">
+                  <strong>${formatPrice(item[fuelType])}</strong>
+                  <span>${fuelType}</span>
+                </div>
+              </div>
+              <div class="price-grid">
+                <div class="mini">
+                  <label>Petrol</label>
+                  <strong>${formatPrice(item.petrol)}</strong>
+                </div>
+                <div class="mini">
+                  <label>Diesel</label>
+                  <strong>${formatPrice(item.diesel)}</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderUnmatched() {
+      const unmatched = (apiData && apiData.unmatched) ? apiData.unmatched : [];
+      unmatchedWrap.innerHTML = unmatched.map(item => `
+        <div class="muted-card">
+          <h3>${item.station}</h3>
+          <p>${item.area}</p>
+          <div class="status">Awaiting official API match</div>
+        </div>
+      `).join('');
+    }
+
+    function render() {
+      petrolBtn.classList.toggle('active', fuelType === 'petrol');
+      dieselBtn.classList.toggle('active', fuelType === 'diesel');
+      renderNotice();
+      const filtered = getFiltered();
+      renderCheapest(filtered);
+      renderResults(filtered);
+      renderUnmatched();
+    }
+
+    async function loadPrices() {
+      try {
+        const res = await fetch('/.netlify/functions/fuel-prices');
+        apiData = await res.json();
+      } catch (err) {
+        apiData = { ok: false, error: 'Network error while fetching API data.' };
+      }
+      render();
+    }
+
+    petrolBtn.addEventListener('click', () => {
+      fuelType = 'petrol';
+      render();
+    });
+
+    dieselBtn.addEventListener('click', () => {
+      fuelType = 'diesel';
+      render();
+    });
+
+    loadPrices();
+  </script>
+</body>
+</html>
