@@ -1,202 +1,261 @@
-exports.handler = async function () {
-  const clientId = process.env.FUEL_FINDER_CLIENT_ID;
-  const clientSecret = process.env.FUEL_FINDER_CLIENT_SECRET;
+// netlify/functions/fuel-prices.js
 
-  if (!clientId || !clientSecret) {
-    return json(500, {
-      ok: false,
-      error: "Missing Fuel Finder environment variables."
-    });
+const DEFAULT_TOKEN_URL = "https://api.fuel-finder.service.gov.uk/api/v1/access-token";
+const DEFAULT_PRICES_URL = "https://api.fuel-finder.service.gov.uk/api/v1/pfs/fuel-prices?batch-number=1";
+const DEFAULT_FORECOURTS_URL = "https://api.fuel-finder.service.gov.uk/api/v1/pfs";
+
+const json = (statusCode, body) => ({
+  statusCode,
+  headers: {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "public, max-age=300",
+    "Access-Control-Allow-Origin": "*",
+  },
+  body: JSON.stringify(body),
+});
+
+const getEnv = (...keys) => {
+  for (const key of keys) {
+    const value = process.env[key];
+    if (value && String(value).trim()) return String(value).trim();
   }
-
-  const baseUrl = "https://www.fuel-finder.service.gov.uk";
-  const matchedStations = [
-    { station: "GO – Dromore Road", area: "14 Dromore Road", officialNames: ["Classic Service Station Limited", "Classic Service Station"], addressHints: ["14 dromore road"] },
-    { station: "Hilltop Fuels – A5 Station", area: "135 Curr Road", officialNames: ["Hilltop Fuels A5"], addressHints: ["135 curr road", "curr road"] },
-    { station: "ASDA Petrol Station", area: "31 Dromore Road", officialNames: ["Asda Omagh Superstore"], addressHints: ["31 dromore road"] },
-    { station: "Nicholl Fuels", area: "53 Dromore Road", officialNames: ["Nicholl Auto365 Culmore Omagh", "Nicholl Fuel Oils"], addressHints: ["53 dromore road"] },
-    { station: "Hilltop Fuels – Mountjoy Filling Station", area: "88B Beltany Road", officialNames: ["Mountjoy Filling Station"], addressHints: ["88b beltany road", "beltany road"] },
-    { station: "Circle K – 232 Omagh Road", area: "232 Omagh Road", officialNames: ["Circle K"], addressHints: ["232 omagh road"] },
-    { station: "Circle K – 82 Derry Road", area: "82 Derry Road", officialNames: ["Circle K"], addressHints: ["82 derry road"] }
-  ];
-
-  const unmatched = [
-    { station: "Solo – Doherty Firewood & Fuels", area: "Gortrush Industrial Estate" },
-    { station: "Campsie Service Station", area: "Campsie Road" },
-    { station: "Emo", area: "Curr Road" },
-    { station: "Solo", area: "2 Gortin Road" },
-    { station: "Glendale Filling Station", area: "Killyclogher Road" }
-  ];
-
-  try {
-    const accessToken = await getAccessToken(baseUrl, clientId, clientSecret);
-    const allPrices = await getAllFuelPrices(baseUrl, accessToken);
-
-    const matched = matchedStations.map((station) => {
-      const row = findStationMatch(allPrices, station);
-      const parsed = parseStation(row);
-      return {
-        station: station.station,
-        area: station.area,
-        petrol: parsed.petrol,
-        diesel: parsed.diesel,
-        updated: parsed.updated
-      };
-    }).filter((x) => x.petrol !== null || x.diesel !== null);
-
-    return json(200, {
-      ok: true,
-      generated_at: new Date().toISOString(),
-      matched,
-      unmatched
-    });
-  } catch (error) {
-    return json(500, {
-      ok: false,
-      error: error.message || "Fuel Finder API request failed."
-    });
-  }
+  return "";
 };
 
-async function getAccessToken(baseUrl, clientId, clientSecret) {
-  const url = `${baseUrl}/api/v1/oauth/generate_access_token`;
-
-  let res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      client_id: clientId,
-      client_secret: clientSecret
-    })
-  });
-
-  if (!res.ok) {
-    const body = new URLSearchParams({
-      grant_type: "client_credentials",
-      client_id: clientId,
-      client_secret: clientSecret,
-      scope: "fuelfinder.read"
-    });
-
-    res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: body.toString()
-    });
-  }
-
-  if (!res.ok) {
-    const text = await safeText(res);
-    throw new Error(`Token request failed (${res.status}). ${text}`);
-  }
-
-  const data = await res.json();
-  if (!data.access_token) {
-    throw new Error("Access token not returned by Fuel Finder.");
-  }
-  return data.access_token;
-}
-
-async function getAllFuelPrices(baseUrl, token) {
-  const all = [];
-  for (let batch = 1; batch <= 30; batch++) {
-    const url = `${baseUrl}/api/v1/pfs/fuel-prices?batch-number=${batch}`;
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-
-    if (!res.ok) {
-      const text = await safeText(res);
-      throw new Error(`Fuel prices request failed on batch ${batch} (${res.status}). ${text}`);
-    }
-
-    const data = await res.json();
-    if (!Array.isArray(data) || data.length === 0) break;
-    all.push(...data);
-  }
-  return all;
-}
-
-function findStationMatch(rows, station) {
-  const names = station.officialNames.map((x) => x.toLowerCase());
-  const hints = station.addressHints.map((x) => x.toLowerCase());
-
-  let found = rows.find((row) => {
-    const trading = (row.trading_name || "").toLowerCase();
-    const full = JSON.stringify(row).toLowerCase();
-    return names.includes(trading) && hints.some((hint) => full.includes(hint));
-  });
-  if (found) return found;
-
-  found = rows.find((row) => {
-    const full = JSON.stringify(row).toLowerCase();
-    return hints.some((hint) => full.includes(hint));
-  });
-  if (found) return found;
-
-  return rows.find((row) => {
-    const trading = (row.trading_name || "").toLowerCase();
-    return names.includes(trading);
-  }) || null;
-}
-
-function parseStation(row) {
-  if (!row) return { petrol: null, diesel: null, updated: "" };
-
-  const prices = Array.isArray(row.fuel_prices) ? row.fuel_prices : [];
-  let petrol = null;
-  let diesel = null;
-  let updated = "";
-
-  for (const p of prices) {
-    const fuelType = String(p.fuel_type || p.fuel_grade || "").toLowerCase();
-    const price = parseNumber(p.price ?? p.amount ?? p.fuel_price);
-    const time = p.updated_at || p.update_timestamp || p.price_updated_at || "";
-
-    if (fuelType.includes("diesel") || fuelType.includes("b7")) {
-      if (price !== null) diesel = price;
-      if (time && !updated) updated = time;
-    } else if (fuelType.includes("e10") || fuelType.includes("petrol") || fuelType.includes("unleaded")) {
-      if (price !== null) petrol = price;
-      if (time && !updated) updated = time;
-    }
-  }
-
-  return {
-    petrol,
-    diesel,
-    updated: formatTime(updated)
-  };
-}
-
-function parseNumber(value) {
-  if (value === null || value === undefined || value === "") return null;
-  const num = Number(value);
-  if (Number.isNaN(num)) return null;
-  if (num > 10) return num / 100;
-  return num;
-}
-
-function formatTime(value) {
-  if (!value) return "";
-  return String(value).replace(" GMT+0000 (Coordinated Universal Time)", "");
-}
-
-async function safeText(res) {
+const safeText = async (res) => {
   try {
     return await res.text();
   } catch {
     return "";
   }
-}
+};
 
-function json(statusCode, body) {
-  return {
-    statusCode,
+const isOmaghStation = (station) => {
+  const haystack = [
+    station?.town,
+    station?.city,
+    station?.locality,
+    station?.addressLine1,
+    station?.addressLine2,
+    station?.addressLine3,
+    station?.addressLine4,
+    station?.postcode,
+    station?.name,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return haystack.includes("omagh") || haystack.includes("bt78");
+};
+
+const toNumber = (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
+const extractStationId = (item) =>
+  item?.pfsId ||
+  item?.pfs_id ||
+  item?.forecourtId ||
+  item?.forecourt_id ||
+  item?.siteId ||
+  item?.site_id ||
+  item?.id ||
+  null;
+
+const getToken = async ({ tokenUrl, clientId, clientSecret }) => {
+  const basic = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+
+  const body = new URLSearchParams({
+    grant_type: "client_credentials",
+  });
+
+  const res = await fetch(tokenUrl, {
+    method: "POST",
     headers: {
-      "Content-Type": "application/json",
-      "Cache-Control": "no-store"
+      Authorization: `Basic ${basic}`,
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
     },
-    body: JSON.stringify(body)
-  };
+    body: body.toString(),
+  });
+
+  const raw = await safeText(res);
+
+  if (!res.ok) {
+    throw new Error(`Token request failed (${res.status}): ${raw || res.statusText}`);
+  }
+
+  let data;
+  try {
+    data = raw ? JSON.parse(raw) : {};
+  } catch {
+    throw new Error(`Token response was not valid JSON: ${raw}`);
+  }
+
+  const accessToken =
+    data?.access_token ||
+    data?.accessToken ||
+    data?.token ||
+    "";
+
+  if (!accessToken) {
+    throw new Error(`Token response missing access_token: ${raw}`);
+  }
+
+  return accessToken;
+};
+
+const getJson = async (url, accessToken) => {
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+    },
+  });
+
+  const raw = await safeText(res);
+
+  if (!res.ok) {
+    throw new Error(`API request failed (${res.status}) for ${url}: ${raw || res.statusText}`);
+  }
+
+  try {
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    throw new Error(`Invalid JSON from ${url}: ${raw}`);
+  }
+};
+
+export async function handler() {
+  try {
+    const clientId = getEnv(
+      "FUEL_FINDER_CLIENT_ID",
+      "FUEL_CLIENT_ID",
+      "FF_CLIENT_ID",
+      "CLIENT_ID"
+    );
+
+    const clientSecret = getEnv(
+      "FUEL_FINDER_CLIENT_SECRET",
+      "FUEL_CLIENT_SECRET",
+      "FF_CLIENT_SECRET",
+      "CLIENT_SECRET"
+    );
+
+    const tokenUrl = getEnv(
+      "FUEL_FINDER_TOKEN_URL",
+      "FUEL_TOKEN_URL",
+      "FF_TOKEN_URL"
+    ) || DEFAULT_TOKEN_URL;
+
+    const pricesUrl = getEnv(
+      "FUEL_FINDER_PRICES_URL",
+      "FUEL_PRICES_URL",
+      "FF_PRICES_URL"
+    ) || DEFAULT_PRICES_URL;
+
+    const forecourtsUrl = getEnv(
+      "FUEL_FINDER_FORECOURTS_URL",
+      "FUEL_FORECOURTS_URL",
+      "FF_FORECOURTS_URL"
+    ) || DEFAULT_FORECOURTS_URL;
+
+    if (!clientId || !clientSecret) {
+      return json(500, {
+        error: "Missing Fuel Finder credentials",
+        missing: {
+          clientId: !clientId,
+          clientSecret: !clientSecret,
+        },
+      });
+    }
+
+    const accessToken = await getToken({ tokenUrl, clientId, clientSecret });
+
+    const [pricesPayload, forecourtsPayload] = await Promise.all([
+      getJson(pricesUrl, accessToken),
+      getJson(forecourtsUrl, accessToken),
+    ]);
+
+    const prices =
+      pricesPayload?.data ||
+      pricesPayload?.items ||
+      pricesPayload?.results ||
+      pricesPayload?.fuelPrices ||
+      pricesPayload?.prices ||
+      [];
+
+    const forecourts =
+      forecourtsPayload?.data ||
+      forecourtsPayload?.items ||
+      forecourtsPayload?.results ||
+      forecourtsPayload?.forecourts ||
+      forecourtsPayload?.stations ||
+      [];
+
+    const forecourtMap = new Map();
+
+    for (const station of forecourts) {
+      const id = extractStationId(station);
+      if (!id) continue;
+      forecourtMap.set(String(id), station);
+    }
+
+    const merged = prices
+      .map((priceItem) => {
+        const id = extractStationId(priceItem);
+        const station = id ? forecourtMap.get(String(id)) : null;
+
+        return {
+          id: id || null,
+          name:
+            station?.name ||
+            station?.siteName ||
+            station?.stationName ||
+            priceItem?.name ||
+            "",
+          brand:
+            station?.brand ||
+            station?.brandName ||
+            priceItem?.brand ||
+            "",
+          addressLine1: station?.addressLine1 || station?.address1 || "",
+          addressLine2: station?.addressLine2 || station?.address2 || "",
+          addressLine3: station?.addressLine3 || station?.address3 || "",
+          town:
+            station?.town ||
+            station?.city ||
+            station?.locality ||
+            "",
+          postcode: station?.postcode || "",
+          e10: toNumber(priceItem?.e10 ?? priceItem?.petrol ?? priceItem?.unleaded),
+          e5: toNumber(priceItem?.e5 ?? priceItem?.superUnleaded),
+          b7: toNumber(priceItem?.b7 ?? priceItem?.diesel),
+          sdv: toNumber(priceItem?.sdv ?? priceItem?.superDiesel),
+          updatedAt:
+            priceItem?.updatedAt ||
+            priceItem?.lastUpdated ||
+            priceItem?.timestamp ||
+            null,
+        };
+      })
+      .filter(isOmaghStation)
+      .sort((a, b) => {
+        const aBest = [a.e10, a.e5, a.b7, a.sdv].filter((n) => n !== null).sort((x, y) => x - y)[0] ?? 999999;
+        const bBest = [b.e10, b.e5, b.b7, b.sdv].filter((n) => n !== null).sort((x, y) => x - y)[0] ?? 999999;
+        return aBest - bBest;
+      });
+
+    return json(200, {
+      ok: true,
+      count: merged.length,
+      stations: merged,
+    });
+  } catch (error) {
+    return json(500, {
+      error: error?.message || "Unknown error",
+    });
+  }
 }
