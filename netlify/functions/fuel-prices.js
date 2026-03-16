@@ -14,6 +14,8 @@ const FEEDS = [
   { brand: "Tesco", url: "https://www.tesco.com/fuel_prices/fuel_prices_data.json" },
 ];
 
+const TARGET_POSTCODES = ["bt781qz"];
+
 const json = (statusCode, body) => ({
   statusCode,
   headers: {
@@ -55,41 +57,7 @@ const pickArray = (payload) => {
   if (Array.isArray(payload?.features)) return payload.features;
   if (Array.isArray(payload?.data?.stations)) return payload.data.stations;
   if (Array.isArray(payload?.data?.items)) return payload.data.items;
-  if (Array.isArray(payload?.stations?.stations)) return payload.stations.stations;
   return [];
-};
-
-const stationHaystack = (station, brandFallback = "") =>
-  [
-    station?.name,
-    station?.siteName,
-    station?.stationName,
-    station?.station_name,
-    station?.brand,
-    station?.brandName,
-    brandFallback,
-    station?.address,
-    station?.address1,
-    station?.address2,
-    station?.address3,
-    station?.address4,
-    station?.addressLine1,
-    station?.addressLine2,
-    station?.addressLine3,
-    station?.addressLine4,
-    station?.town,
-    station?.city,
-    station?.locality,
-    station?.county,
-    station?.postcode,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-
-const isOmaghStation = (station, brandFallback = "") => {
-  const haystack = stationHaystack(station, brandFallback);
-  return haystack.includes("omagh") || haystack.includes("bt78");
 };
 
 const extractPricesObject = (station) =>
@@ -131,11 +99,45 @@ const getFuelPrice = (prices, keys) => {
   );
 
   for (const key of keys) {
-    const match = lowered[String(key).toLowerCase()];
-    if (match !== undefined) return toNumber(match);
+    if (lowered[String(key).toLowerCase()] !== undefined) {
+      return toNumber(lowered[String(key).toLowerCase()]);
+    }
   }
 
   return null;
+};
+
+const normalisePostcode = (value) =>
+  String(value || "").toLowerCase().replace(/\s+/g, "");
+
+const matchesTargetStation = (station, brandFallback = "") => {
+  const haystack = [
+    station?.postcode,
+    station?.addressLine1,
+    station?.addressLine2,
+    station?.addressLine3,
+    station?.addressLine4,
+    station?.address1,
+    station?.address2,
+    station?.address3,
+    station?.address4,
+    station?.address,
+    station?.town,
+    station?.city,
+    station?.locality,
+    station?.name,
+    station?.siteName,
+    station?.stationName,
+    station?.brand,
+    station?.brandName,
+    brandFallback,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .replace(/\s+/g, "");
+
+  return TARGET_POSTCODES.some((postcode) => haystack.includes(postcode));
 };
 
 const normaliseStation = (station, brandFallback = "") => {
@@ -256,13 +258,14 @@ export async function handler() {
 
     const stations = successful
       .flatMap((feed) => feed.rows)
-      .filter((station) => isOmaghStation(station, station.brand))
+      .filter((station) => matchesTargetStation(station, station.brand))
       .sort((a, b) => a.price - b.price);
 
     return json(200, {
       ok: true,
       count: stations.length,
       stations,
+      targets: TARGET_POSTCODES,
       sources: {
         successful: successful.map((x) => x.brand),
         failed: failed.map((x) => ({ brand: x.brand, error: x.error })),
