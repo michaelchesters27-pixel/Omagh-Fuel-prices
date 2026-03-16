@@ -1,8 +1,18 @@
 // netlify/functions/fuel-prices.js
 
-const DEFAULT_TOKEN_URL = "https://api.fuel-finder.service.gov.uk/v1/access-token";
-const UNLEADED_URL = "https://api.fuel-finder.service.gov.uk/v1/prices?fuel_type=unleaded";
-const DIESEL_URL = "https://api.fuel-finder.service.gov.uk/v1/prices?fuel_type=diesel";
+const FEEDS = [
+  { brand: "Asda", url: "https://storelocator.asda.com/fuel_prices_data.json" },
+  { brand: "bp", url: "https://www.bp.com/en_gb/united-kingdom/home/fuelprices/fuel_prices_data.json" },
+  { brand: "Esso Tesco Alliance", url: "https://fuelprices.esso.co.uk/latestdata.json" },
+  { brand: "JET", url: "https://jetlocal.co.uk/fuel_prices_data.json" },
+  { brand: "Morrisons", url: "https://www.morrisons.com/fuel-prices/fuel.json" },
+  { brand: "Moto", url: "https://moto-way.com/fuel-price/fuel_prices.json" },
+  { brand: "Motor Fuel Group", url: "https://fuel.motorfuelgroup.com/fuel_prices_data.json" },
+  { brand: "Rontec", url: "https://www.rontec-servicestations.co.uk/fuel-prices/data/fuel_prices_data.json" },
+  { brand: "Sainsburys", url: "https://api.sainsburys.co.uk/v1/exports/latest/fuel_prices_data.json" },
+  { brand: "SGN", url: "https://www.sgnretail.uk/files/data/SGN_daily_fuel_prices.json" },
+  { brand: "Tesco", url: "https://www.tesco.com/fuel_prices/fuel_prices_data.json" },
+];
 
 const json = (statusCode, body) => ({
   statusCode,
@@ -14,14 +24,6 @@ const json = (statusCode, body) => ({
   body: JSON.stringify(body, null, 2),
 });
 
-const getEnv = (...keys) => {
-  for (const key of keys) {
-    const value = process.env[key];
-    if (value && String(value).trim()) return String(value).trim();
-  }
-  return "";
-};
-
 const safeText = async (res) => {
   try {
     return await res.text();
@@ -30,215 +32,246 @@ const safeText = async (res) => {
   }
 };
 
-const isOmaghStation = (station) => {
-  const haystack = [
-    station?.town,
-    station?.city,
-    station?.locality,
+const toNumber = (value) => {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
+const firstString = (...values) => {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+};
+
+const pickArray = (payload) => {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.stations)) return payload.stations;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.results)) return payload.results;
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.forecourts)) return payload.forecourts;
+  if (Array.isArray(payload?.features)) return payload.features;
+  if (Array.isArray(payload?.data?.stations)) return payload.data.stations;
+  if (Array.isArray(payload?.data?.items)) return payload.data.items;
+  if (Array.isArray(payload?.stations?.stations)) return payload.stations.stations;
+  return [];
+};
+
+const stationHaystack = (station, brandFallback = "") =>
+  [
+    station?.name,
+    station?.siteName,
+    station?.stationName,
+    station?.station_name,
+    station?.brand,
+    station?.brandName,
+    brandFallback,
+    station?.address,
+    station?.address1,
+    station?.address2,
+    station?.address3,
+    station?.address4,
     station?.addressLine1,
     station?.addressLine2,
     station?.addressLine3,
     station?.addressLine4,
+    station?.town,
+    station?.city,
+    station?.locality,
+    station?.county,
     station?.postcode,
-    station?.name,
-    station?.brand,
-    station?.siteName,
-    station?.stationName,
   ]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
 
+const isOmaghStation = (station, brandFallback = "") => {
+  const haystack = stationHaystack(station, brandFallback);
   return haystack.includes("omagh") || haystack.includes("bt78");
 };
 
-const toNumber = (value) => {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
+const extractPricesObject = (station) =>
+  station?.prices ||
+  station?.price ||
+  station?.fuelPrices ||
+  station?.fuel_prices ||
+  station?.fuels ||
+  station?.fuel ||
+  {};
+
+const getFuelPrice = (prices, keys) => {
+  if (!prices) return null;
+
+  if (Array.isArray(prices)) {
+    for (const item of prices) {
+      const fuelName = String(
+        item?.fuel ||
+          item?.fuelType ||
+          item?.type ||
+          item?.name ||
+          item?.product ||
+          ""
+      ).toLowerCase();
+
+      if (keys.some((k) => fuelName === k.toLowerCase())) {
+        return toNumber(item?.price ?? item?.amount ?? item?.value);
+      }
+    }
+    return null;
+  }
+
+  for (const key of keys) {
+    if (prices[key] !== undefined) return toNumber(prices[key]);
+  }
+
+  const lowered = Object.fromEntries(
+    Object.entries(prices).map(([k, v]) => [String(k).toLowerCase(), v])
+  );
+
+  for (const key of keys) {
+    const match = lowered[String(key).toLowerCase()];
+    if (match !== undefined) return toNumber(match);
+  }
+
+  return null;
 };
 
-const getToken = async ({ tokenUrl, clientId, clientSecret }) => {
-  const body = new URLSearchParams({
-    grant_type: "client_credentials",
-    client_id: clientId,
-    client_secret: clientSecret,
-    scope: "fuelfinder.read",
-  });
+const normaliseStation = (station, brandFallback = "") => {
+  const prices = extractPricesObject(station);
 
-  const res = await fetch(tokenUrl, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: body.toString(),
-  });
+  const base = {
+    id:
+      station?.site_id ||
+      station?.siteId ||
+      station?.station_id ||
+      station?.stationId ||
+      station?.id ||
+      null,
+    name: firstString(
+      station?.name,
+      station?.siteName,
+      station?.stationName,
+      station?.station_name,
+      brandFallback
+    ),
+    brand: firstString(
+      station?.brand,
+      station?.brandName,
+      brandFallback
+    ),
+    addressLine1: firstString(station?.addressLine1, station?.address1, station?.address),
+    addressLine2: firstString(station?.addressLine2, station?.address2),
+    addressLine3: firstString(station?.addressLine3, station?.address3),
+    addressLine4: firstString(station?.addressLine4, station?.address4),
+    town: firstString(station?.town, station?.city, station?.locality),
+    postcode: firstString(station?.postcode),
+    updatedAt: firstString(
+      station?.last_updated,
+      station?.lastUpdated,
+      station?.updatedAt,
+      station?.timestamp
+    ) || null,
+  };
 
-  const raw = await safeText(res);
+  const e10 = getFuelPrice(prices, ["E10", "e10", "unleaded", "petrol"]);
+  const e5 = getFuelPrice(prices, ["E5", "e5", "super", "super_unleaded", "super unleaded"]);
+  const diesel = getFuelPrice(prices, ["B7", "b7", "diesel"]);
+  const sdv = getFuelPrice(prices, ["SDV", "sdv", "premium_diesel", "premium diesel"]);
 
-  if (!res.ok) {
-    throw new Error(`Token request failed (${res.status}): ${raw || res.statusText}`);
-  }
+  const rows = [];
 
-  let data;
-  try {
-    data = raw ? JSON.parse(raw) : {};
-  } catch {
-    throw new Error(`Token response was not valid JSON: ${raw}`);
-  }
+  if (e10 !== null) rows.push({ ...base, fuelType: "petrol", price: e10 });
+  else if (e5 !== null) rows.push({ ...base, fuelType: "petrol", price: e5 });
 
-  const accessToken =
-    data?.access_token ||
-    data?.accessToken ||
-    data?.token ||
-    "";
+  if (diesel !== null) rows.push({ ...base, fuelType: "diesel", price: diesel });
+  else if (sdv !== null) rows.push({ ...base, fuelType: "diesel", price: sdv });
 
-  if (!accessToken) {
-    throw new Error(`Token response missing access_token: ${raw}`);
-  }
-
-  return accessToken;
+  return rows;
 };
 
-const getJson = async (url, accessToken, label) => {
+const fetchFeed = async ({ brand, url }) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+
   try {
     const res = await fetch(url, {
       method: "GET",
+      signal: controller.signal,
       headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: "application/json",
+        Accept: "application/json,text/plain,*/*",
+        "User-Agent": "Omagh Fuel Prices/1.0",
       },
     });
 
     const raw = await safeText(res);
 
     if (!res.ok) {
-      throw new Error(`${label} failed (${res.status}): ${raw || res.statusText}`);
+      throw new Error(`${res.status} ${res.statusText}`);
     }
 
+    let payload;
     try {
-      return raw ? JSON.parse(raw) : {};
+      payload = JSON.parse(raw);
     } catch {
-      throw new Error(`${label} returned invalid JSON: ${raw}`);
+      throw new Error("Invalid JSON");
     }
+
+    const stations = pickArray(payload);
+    const rows = stations.flatMap((station) => normaliseStation(station, brand));
+
+    return {
+      ok: true,
+      brand,
+      url,
+      rows,
+    };
   } catch (error) {
-    const causeMessage =
-      error?.cause?.message ||
-      error?.cause?.code ||
-      "";
-
-    throw new Error(
-      causeMessage
-        ? `${label} fetch failed: ${causeMessage}`
-        : `${label} fetch failed: ${error?.message || "Unknown error"}`
-    );
+    return {
+      ok: false,
+      brand,
+      url,
+      error: error?.message || "Fetch failed",
+    };
+  } finally {
+    clearTimeout(timeout);
   }
-};
-
-const normaliseRows = (payload, fuelType) => {
-  const rows =
-    payload?.data ||
-    payload?.items ||
-    payload?.results ||
-    payload?.prices ||
-    payload?.fuelPrices ||
-    [];
-
-  if (!Array.isArray(rows)) return [];
-
-  return rows.map((row) => ({
-    id:
-      row?.pfsId ||
-      row?.pfs_id ||
-      row?.forecourtId ||
-      row?.forecourt_id ||
-      row?.siteId ||
-      row?.site_id ||
-      row?.id ||
-      null,
-    name:
-      row?.name ||
-      row?.siteName ||
-      row?.stationName ||
-      "",
-    brand:
-      row?.brand ||
-      row?.brandName ||
-      "",
-    addressLine1: row?.addressLine1 || row?.address1 || "",
-    addressLine2: row?.addressLine2 || row?.address2 || "",
-    addressLine3: row?.addressLine3 || row?.address3 || "",
-    addressLine4: row?.addressLine4 || row?.address4 || "",
-    town: row?.town || row?.city || row?.locality || "",
-    postcode: row?.postcode || "",
-    fuelType,
-    price: toNumber(
-      row?.price ??
-      row?.amount ??
-      row?.retailPrice ??
-      row?.fuelPrice
-    ),
-    updatedAt:
-      row?.updatedAt ||
-      row?.lastUpdated ||
-      row?.timestamp ||
-      null,
-  }));
 };
 
 export async function handler() {
   try {
-    const clientId = getEnv(
-      "FUEL_FINDER_CLIENT_ID",
-      "FUEL_CLIENT_ID",
-      "FF_CLIENT_ID",
-      "CLIENT_ID"
-    );
+    const settled = await Promise.all(FEEDS.map(fetchFeed));
 
-    const clientSecret = getEnv(
-      "FUEL_FINDER_CLIENT_SECRET",
-      "FUEL_CLIENT_SECRET",
-      "FF_CLIENT_SECRET",
-      "CLIENT_SECRET"
-    );
+    const successful = settled.filter((x) => x.ok);
+    const failed = settled.filter((x) => !x.ok);
 
-    const tokenUrl =
-      getEnv("FUEL_FINDER_TOKEN_URL", "FUEL_TOKEN_URL", "FF_TOKEN_URL") ||
-      DEFAULT_TOKEN_URL;
-
-    if (!clientId || !clientSecret) {
+    if (successful.length === 0) {
       return json(500, {
         ok: false,
-        error: "Missing Fuel Finder credentials",
-        missing: {
-          clientId: !clientId,
-          clientSecret: !clientSecret,
-        },
+        error: "All retailer feeds failed",
+        failed,
       });
     }
 
-    const accessToken = await getToken({ tokenUrl, clientId, clientSecret });
-
-    const [unleadedPayload, dieselPayload] = await Promise.all([
-      getJson(UNLEADED_URL, accessToken, "unleaded"),
-      getJson(DIESEL_URL, accessToken, "diesel"),
-    ]);
-
-    const unleadedRows = normaliseRows(unleadedPayload, "petrol");
-    const dieselRows = normaliseRows(dieselPayload, "diesel");
-
-    const allRows = [...unleadedRows, ...dieselRows].filter(isOmaghStation);
+    const stations = successful
+      .flatMap((feed) => feed.rows)
+      .filter((station) => isOmaghStation(station, station.brand))
+      .sort((a, b) => a.price - b.price);
 
     return json(200, {
       ok: true,
-      count: allRows.length,
-      stations: allRows,
+      count: stations.length,
+      stations,
+      sources: {
+        successful: successful.map((x) => x.brand),
+        failed: failed.map((x) => ({ brand: x.brand, error: x.error })),
+      },
     });
   } catch (error) {
     return json(500, {
       ok: false,
       error: error?.message || "Unknown error",
-      cause: error?.cause?.message || null,
     });
   }
 }
